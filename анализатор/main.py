@@ -1,9 +1,12 @@
+import json
 import os
+import uuid
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
@@ -13,9 +16,11 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
+DATASETS_FILE = Path(__file__).resolve().parent / "datasets.json"
 
 current_df: pd.DataFrame | None = None
 current_file_name: str | None = None
+current_dataset_id: str | None = None
 upload_status = {"status": "idle", "progress": 0}
 
 
@@ -51,6 +56,88 @@ class AISuggestRequest(BaseModel):
 
 def save_file(file_path: Path, content: bytes):
     file_path.write_bytes(content)
+
+
+def load_datasets() -> list[dict[str, object]]:
+    if not DATASETS_FILE.exists():
+        return []
+    try:
+        return json.loads(DATASETS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def save_datasets(datasets: list[dict[str, object]]):
+    DATASETS_FILE.write_text(
+        json.dumps(datasets, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def parse_tags(tags_text: str | None) -> list[str]:
+    if not tags_text:
+        return []
+    return [tag.strip() for tag in tags_text.split(",") if tag.strip()]
+
+
+def read_table_from_path(file_path: Path):
+    filename = file_path.name.lower()
+    if filename.endswith(".xlsx"):
+        return pd.read_excel(file_path)
+    try:
+        return pd.read_csv(
+            file_path,
+            encoding="utf-8",
+            on_bad_lines="skip",
+            sep=None,
+            engine="python",
+        )
+    except Exception:
+        return pd.read_csv(
+            file_path,
+            encoding="utf-8",
+            on_bad_lines="skip",
+            sep=";",
+            engine="python",
+        )
+
+
+def get_dataset(dataset_id: str) -> dict[str, object] | None:
+    for dataset in load_datasets():
+        if dataset["id"] == dataset_id:
+            return dataset
+    return None
+
+
+def load_current_dataset(dataset_id: str):
+    global current_df, current_file_name, current_dataset_id
+
+    dataset = get_dataset(dataset_id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    file_path = Path(str(dataset["file_path"]))
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Dataset file not found")
+
+    current_df = read_table_from_path(file_path)
+    current_file_name = str(dataset["name"])
+    current_dataset_id = dataset_id
+    return dataset
+
+
+def create_dataset_record(name: str, file_path: Path, tags: list[str]) -> dict[str, object]:
+    datasets = load_datasets()
+    dataset = {
+        "id": uuid.uuid4().hex,
+        "name": name,
+        "file_path": str(file_path),
+        "created_at": datetime.utcnow().isoformat(),
+        "tags": tags,
+    }
+    datasets.append(dataset)
+    save_datasets(datasets)
+    return dataset
 
 
 def ensure_data_dir() -> Path:
@@ -161,8 +248,57 @@ def dataframe_page_to_records(df: pd.DataFrame, page: int, page_size: int):
 
 
 @app.get("/", response_class=HTMLResponse)
-def index():
+def datasets_index():
+    datasets = load_datasets()
+    dataset_items = "".join(
+        f"""
+        <div style="border:1px solid #d1d5db;border-radius:8px;padding:12px;margin-top:12px;">
+            <div><strong>{dataset["name"]}</strong></div>
+            <div style="color:#6b7280;font-size:14px;margin-top:4px;">{dataset["created_at"]}</div>
+            <div style="color:#374151;font-size:14px;margin-top:4px;">Tags: {", ".join(dataset.get("tags", [])) or "-"}</div>
+            <div style="margin-top:8px;">
+                <a href="/app?dataset_id={dataset["id"]}">Open</a>
+            </div>
+        </div>
+        """
+        for dataset in reversed(datasets)
+    )
+    return HTMLResponse(
+        f"""<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Datasets</title>
+</head>
+<body style="font-family:Arial,sans-serif;background:#f3f4f6;margin:0;padding:24px;">
+    <div style="max-width:960px;margin:0 auto;">
+        <h1>Datasets</h1>
+        <form action="/datasets/upload" method="post" enctype="multipart/form-data" style="background:#fff;border:1px solid #d1d5db;border-radius:8px;padding:16px;">
+            <div>
+                <input type="file" name="file" required />
+            </div>
+            <div style="margin-top:12px;">
+                <input type="text" name="tags" placeholder="tags, comma, separated" style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;" />
+            </div>
+            <div style="margin-top:12px;">
+                <button type="submit">Upload</button>
+            </div>
+        </form>
+        <div style="margin-top:24px;">
+            {dataset_items or '<div style="background:#fff;border:1px solid #d1d5db;border-radius:8px;padding:16px;">No datasets yet</div>'}
+        </div>
+    </div>
+</body>
+</html>"""
+    )
+
+
+@app.get("/app", response_class=HTMLResponse)
+def index(dataset_id: str | None = Query(default=None)):
     print("HTML RESPONSE FROM MAIN.PY")
+    initial_dataset = None
+    if dataset_id:
+        initial_dataset = load_current_dataset(dataset_id)
     return HTMLResponse(
         """<!doctype html>
 <html>
@@ -700,6 +836,54 @@ function updateDatasetInfo(fileName, rowCount, columnCount) {
     `;
 }
 
+async function initializeLoadedDataset() {
+    const currentDatasetRes = await fetch('/current_dataset');
+    const currentDataset = await currentDatasetRes.json();
+
+    if (!currentDataset.id && !currentDataset.name) {
+        return;
+    }
+
+    const columnsRes = await fetch('/columns');
+    const data = await columnsRes.json();
+    const select = document.getElementById('columns');
+    const breakdownSelect = document.getElementById('breakdown-column');
+    select.innerHTML = '';
+    breakdownSelect.innerHTML = '';
+
+    data.columns.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.name;
+        opt.text = c.name;
+        select.appendChild(opt);
+
+        const breakdownOpt = document.createElement('option');
+        breakdownOpt.value = c.name;
+        breakdownOpt.text = c.name;
+        breakdownSelect.appendChild(breakdownOpt);
+    });
+
+    select.onchange = async () => {
+        activeColumn = select.value || null;
+        await loadUniqueValues(select.value);
+    };
+
+    activeColumn = select.value || null;
+    updateDatasetInfo(
+        currentDataset.name,
+        currentDataset.row_count || 0,
+        currentDataset.column_count || 0
+    );
+
+    if (select.value) {
+        await loadUniqueValues(select.value);
+    }
+
+    datasetPage = 1;
+    await loadDatasetPage(1);
+    await group();
+}
+
 function updateUploadStatus(statusData) {
     const progressBar = document.getElementById('upload-progress-bar');
     const statusText = document.getElementById('upload-status-text');
@@ -1202,6 +1386,7 @@ renderBreakdown();
 renderAIMessages();
 updateDatasetPagination();
 setResultMode('table');
+initializeLoadedDataset();
 </script>
 </body>
 </html>
@@ -1214,9 +1399,39 @@ setResultMode('table');
     )
 
 
+@app.post("/datasets/upload")
+async def upload_dataset(file: UploadFile = File(...), tags: str = Form(default="")):
+    global current_df, current_file_name, current_dataset_id
+
+    if not file.filename or not file.filename.lower().endswith((".csv", ".xlsx")):
+        raise HTTPException(status_code=400, detail="Only CSV and XLSX files are supported")
+
+    data_dir = ensure_data_dir()
+    content = await file.read()
+    dataset_id = uuid.uuid4().hex
+    saved_file_path = data_dir / f"{dataset_id}_{file.filename}"
+    await run_in_threadpool(save_file, saved_file_path, content)
+    current_df = read_table_from_path(saved_file_path)
+    current_file_name = file.filename
+    current_dataset_id = dataset_id
+
+    datasets = load_datasets()
+    datasets.append(
+        {
+            "id": dataset_id,
+            "name": file.filename,
+            "file_path": str(saved_file_path),
+            "created_at": datetime.utcnow().isoformat(),
+            "tags": parse_tags(tags),
+        }
+    )
+    save_datasets(datasets)
+    return RedirectResponse(url=f"/app?dataset_id={dataset_id}", status_code=303)
+
+
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
-    global current_df, upload_status, current_file_name
+    global current_df, upload_status, current_file_name, current_dataset_id
 
     if not file.filename or not file.filename.lower().endswith((".csv", ".xlsx")):
         raise HTTPException(status_code=400, detail="Only CSV and XLSX files are supported")
@@ -1245,6 +1460,7 @@ async def upload(file: UploadFile = File(...)):
             file.file.seek(0)
         current_df = await run_in_threadpool(read_table, file)
         current_file_name = file.filename
+        current_dataset_id = None
         preview = current_df.head(50).astype(object).where(pd.notna(current_df.head(50)), None)
         upload_status = {"status": "done", "progress": 100}
         print("done")
@@ -1259,6 +1475,19 @@ async def upload(file: UploadFile = File(...)):
 @app.get("/status")
 async def get_status():
     return upload_status
+
+
+@app.get("/current_dataset")
+async def current_dataset():
+    if current_df is None:
+        return {"id": None, "name": None, "row_count": 0, "column_count": 0}
+
+    return {
+        "id": current_dataset_id,
+        "name": current_file_name,
+        "row_count": int(len(current_df)),
+        "column_count": int(len(current_df.columns)),
+    }
 
 
 @app.get("/columns")
@@ -1315,6 +1544,23 @@ async def unique_values(request: UniqueValuesRequest):
         .tolist()
     )
     return values
+
+
+@app.post("/dataset/{dataset_id}/tags")
+async def update_dataset_tags(dataset_id: str, tags: str = Form(default="")):
+    datasets = load_datasets()
+    updated = False
+    for dataset in datasets:
+        if dataset["id"] == dataset_id:
+            dataset["tags"] = parse_tags(tags)
+            updated = True
+            break
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    save_datasets(datasets)
+    return {"status": "ok"}
 
 
 @app.post("/group")
