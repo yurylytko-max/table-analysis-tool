@@ -710,6 +710,8 @@ let datasetPage = 1;
 let datasetPageSize = 100;
 let datasetTotalRows = 0;
 let statusPollInterval = null;
+let latestDatasetRows = [];
+let latestDatasetColumns = [];
 
 function initGrid() {
     const gridElement = document.getElementById('ag-grid');
@@ -799,6 +801,8 @@ async function loadDatasetPage(page) {
 
     datasetPage = safePage;
     datasetTotalRows = data.total_rows || 0;
+    latestDatasetRows = data.rows || [];
+    latestDatasetColumns = data.columns || [];
     updateDatasetPagination();
 
     const columnDefs = (data.columns || []).map(column => ({
@@ -1198,6 +1202,10 @@ function getAISummary() {
         .slice(0, 10);
 
     return {
+        row_count: datasetTotalRows,
+        columns: [...latestDatasetColumns],
+        preview_rows: latestDatasetRows.slice(0, 5),
+        filters: { ...activeFilters },
         breakdown: [...activeBreakdown],
         top_values: topValues
     };
