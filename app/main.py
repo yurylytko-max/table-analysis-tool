@@ -1181,6 +1181,26 @@ function renderResult(data) {
     setResultMode(resultMode);
 }
 
+function getAISummary() {
+    const rows = flattenResult(latestResult, [...activeBreakdown]);
+    const topValues = rows
+        .map(row => {
+            const keys = Object.keys(row).filter(key => key !== 'count');
+            const valueKey = keys[keys.length - 1];
+            return {
+                value: valueKey ? row[valueKey] : null,
+                count: row.count
+            };
+        })
+        .filter(item => item.value !== null && item.value !== undefined && item.value !== '')
+        .slice(0, 10);
+
+    return {
+        breakdown: [...activeBreakdown],
+        top_values: topValues
+    };
+}
+
 function openCharts() {
     localStorage.setItem("chartData", JSON.stringify(latestResult));
     localStorage.setItem("chartBreakdown", JSON.stringify(activeBreakdown));
@@ -1356,7 +1376,8 @@ async function sendAIMessage() {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
-                message: message
+                message: message,
+                summary: getAISummary()
             })
         });
 
