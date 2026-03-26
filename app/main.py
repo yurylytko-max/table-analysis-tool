@@ -4,7 +4,6 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-import google.generativeai as genai
 import pandas as pd
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -57,6 +56,7 @@ class AISuggestRequest(BaseModel):
 
 class AIQueryRequest(BaseModel):
     message: str
+    summary: dict[str, object] | None = None
 
 
 def save_file(file_path: Path, content: bytes):
@@ -1864,9 +1864,17 @@ async def ai_query(request: AIQueryRequest):
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY is not set")
 
+    import google.generativeai as genai
+
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel("gemini-2.5-flash")
-    response = model.generate_content(request.message)
+    prompt = request.message
+    if request.summary:
+        prompt = (
+            f"{request.message}\n\n"
+            f"Context summary:\n{json.dumps(request.summary, ensure_ascii=False)}"
+        )
+    response = model.generate_content(prompt)
 
     return {
         "type": "analysis",
