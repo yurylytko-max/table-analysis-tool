@@ -3,6 +3,8 @@ import os
 import uuid
 from datetime import datetime
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import pandas as pd
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
@@ -1863,22 +1865,54 @@ async def ai_suggest(request: AISuggestRequest):
 async def ai_query(request: AIQueryRequest):
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY is not set")
-
-    import google.generativeai as genai
-
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.5-flash")
     prompt = request.message
     if request.summary:
         prompt = (
             f"{request.message}\n\n"
             f"Context summary:\n{json.dumps(request.summary, ensure_ascii=False)}"
         )
-    response = model.generate_content(prompt)
+
+    body = json.dumps(
+        {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt}
+                    ]
+                }
+            ]
+        }
+    ).encode("utf-8")
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    )
+    http_request = Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urlopen(http_request, timeout=60) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        detail = error.read().decode("utf-8", errors="ignore") or str(error)
+        raise HTTPException(status_code=502, detail=detail)
+    except URLError as error:
+        raise HTTPException(status_code=502, detail=str(error))
+
+    text = ""
+    for candidate in payload.get("candidates", []):
+        content = candidate.get("content", {})
+        for part in content.get("parts", []):
+            if "text" in part:
+                text += part["text"]
 
     return {
         "type": "analysis",
-        "text": response.text or "",
+        "text": text,
     }
 
 
