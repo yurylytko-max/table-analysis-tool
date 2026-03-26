@@ -1352,32 +1352,26 @@ async function sendAIMessage() {
     input.value = '';
 
     try {
-        const res = await fetch('/ai/suggest', {
+        const res = await fetch('/ai/query', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
-                message: message,
-                filters: { ...activeFilters },
-                breakdown: [...activeBreakdown]
+                message: message
             })
         });
 
         if (!res.ok) {
-            aiMessages.push({ role: 'AI', text: 'No response yet' });
+            const errorText = await res.text();
+            aiMessages.push({ role: 'AI', text: errorText || 'No response yet' });
             renderAIMessages();
             return;
         }
 
         const data = await res.json();
-        if (!data.suggestions || !data.suggestions.length) {
+        if (!data.text) {
             aiMessages.push({ role: 'AI', text: 'No response yet' });
         } else {
-            data.suggestions.forEach(suggestion => {
-                aiMessages.push({
-                    role: 'AI',
-                    text: typeof suggestion === 'string' ? suggestion : JSON.stringify(suggestion)
-                });
-            });
+            aiMessages.push({ role: 'AI', text: data.text });
         }
         renderAIMessages();
     } finally {
