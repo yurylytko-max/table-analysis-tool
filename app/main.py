@@ -1865,11 +1865,23 @@ async def ai_suggest(request: AISuggestRequest):
 async def ai_query(request: AIQueryRequest):
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY is not set")
-    prompt = request.message
+
+    instructions = (
+        "You are an analytics assistant inside a table analysis app. "
+        "You are given a summary of the currently loaded dataset from the app itself. "
+        "Do not say that you cannot see the data if summary is provided. "
+        "Use the summary as the available dataset context. "
+        "If the summary is insufficient for a precise answer, say exactly what is missing, "
+        "but still answer as far as possible from the provided summary. "
+        "Respond concisely."
+    )
+
+    prompt = f"{instructions}\n\nUser request:\n{request.message}"
     if request.summary:
         prompt = (
-            f"{request.message}\n\n"
-            f"Context summary:\n{json.dumps(request.summary, ensure_ascii=False)}"
+            f"{instructions}\n\n"
+            f"Dataset summary:\n{json.dumps(request.summary, ensure_ascii=False)}\n\n"
+            f"User request:\n{request.message}"
         )
 
     body = json.dumps(
