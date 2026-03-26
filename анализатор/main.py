@@ -326,34 +326,35 @@ def index(dataset_id: str | None = Query(default=None)):
         display: grid;
         grid-template-columns: 320px minmax(0, 1fr);
         grid-template-rows: auto auto auto auto;
-        gap: 16px;
+        gap: 12px;
         min-height: 100vh;
-        padding: 16px;
+        padding: 12px;
     }
     .panel {
         background: #fff;
-        border: 1px solid #d1d5db;
-        border-radius: 8px;
-        padding: 16px;
+        border: 1px solid #dde3ea;
+        border-radius: 4px;
+        padding: 12px;
     }
     .panel h2 {
-        margin: 0 0 12px;
-        font-size: 18px;
+        margin: 0 0 10px;
+        font-size: 16px;
+        font-weight: 600;
     }
     .header-panel {
         grid-column: 1 / 3;
         display: grid;
         grid-template-columns: minmax(0, 1fr) 260px;
-        gap: 16px;
+        gap: 12px;
         align-items: start;
-        padding: 8px 10px;
+        padding: 6px 8px;
     }
     .sidebar {
         grid-column: 1;
         grid-row: 2 / 5;
         display: flex;
         flex-direction: column;
-        gap: 16px;
+        gap: 12px;
         min-width: 0;
     }
     .result-panel {
@@ -363,16 +364,24 @@ def index(dataset_id: str | None = Query(default=None)):
         display: flex;
         flex-direction: column;
         gap: 12px;
-        min-height: 360px;
+        min-height: 420px;
+        border-color: #cfd8e3;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
     }
     .ai-panel {
         grid-column: 2;
         grid-row: 3;
         min-width: 0;
+        padding: 10px 12px;
+        background: #f8fafc;
+        border-color: #e5eaf0;
     }
     .preview-panel {
         grid-column: 2;
         grid-row: 4;
+        padding: 10px 12px;
+        background: #fbfcfd;
+        border-color: #e7ebf0;
     }
     .header-actions {
         display: flex;
@@ -381,7 +390,7 @@ def index(dataset_id: str | None = Query(default=None)):
         flex-wrap: wrap;
     }
     .upload-status {
-        margin-top: 8px;
+        margin-top: 6px;
         display: flex;
         align-items: center;
         gap: 10px;
@@ -404,39 +413,40 @@ def index(dataset_id: str | None = Query(default=None)):
         min-height: 0;
         color: #374151;
         background: #f9fafb;
-        border: 1px dashed #d1d5db;
-        border-radius: 6px;
-        padding: 10px 12px;
+        border: 1px dashed #d7dde5;
+        border-radius: 4px;
+        padding: 8px 10px;
         display: flex;
         flex-direction: column;
         justify-content: center;
         gap: 4px;
     }
     .dataset-line {
-        font-size: 14px;
+        font-size: 12px;
         color: #4b5563;
     }
     .header-panel > div > h2 {
-        margin-bottom: 4px;
+        margin-bottom: 2px;
+        font-size: 14px;
     }
     .placeholder, .muted-text {
         color: #6b7280;
-        font-size: 14px;
+        font-size: 13px;
     }
-    .control-block + .control-block { margin-top: 12px; }
+    .control-block + .control-block { margin-top: 10px; }
     label {
         display: block;
-        font-size: 14px;
-        margin-bottom: 6px;
+        font-size: 13px;
+        margin-bottom: 5px;
         color: #374151;
     }
     select, textarea, input[type="text"] {
         width: 100%;
         max-width: 100%;
         min-width: 0;
-        padding: 8px 10px;
+        padding: 7px 9px;
         border: 1px solid #d1d5db;
-        border-radius: 6px;
+        border-radius: 4px;
         background: #fff;
         font: inherit;
     }
@@ -446,9 +456,9 @@ def index(dataset_id: str | None = Query(default=None)):
         white-space: nowrap;
     }
     button {
-        padding: 8px 12px;
+        padding: 7px 10px;
         border: 1px solid #cbd5e1;
-        border-radius: 6px;
+        border-radius: 4px;
         background: #f8fafc;
         cursor: pointer;
         font: inherit;
@@ -460,23 +470,23 @@ def index(dataset_id: str | None = Query(default=None)):
     }
     .button-row {
         display: flex;
-        gap: 8px;
+        gap: 6px;
         flex-wrap: wrap;
     }
     .filter-list, .breakdown-list {
         display: flex;
         flex-direction: column;
-        gap: 8px;
-        margin-top: 12px;
+        gap: 6px;
+        margin-top: 10px;
     }
     .filter-item {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 8px;
-        padding: 8px 10px;
+        padding: 7px 9px;
         border: 1px solid #d1d5db;
-        border-radius: 6px;
+        border-radius: 4px;
         background: #f9fafb;
     }
     .filter-label {
