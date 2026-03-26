@@ -54,6 +54,10 @@ class AISuggestRequest(BaseModel):
     breakdown: list[str] | None = None
 
 
+class AIQueryRequest(BaseModel):
+    message: str
+
+
 def save_file(file_path: Path, content: bytes):
     file_path.write_bytes(content)
 
@@ -1837,6 +1841,14 @@ async def normalize_column(request: NormalizeColumnRequest):
 @app.post("/ai/suggest")
 async def ai_suggest(request: AISuggestRequest):
     return {"suggestions": []}
+
+
+@app.post("/ai/query")
+async def ai_query(request: AIQueryRequest):
+    return {
+        "type": "analysis",
+        "text": "ok",
+    }
 
 
 if __name__ == "__main__":
