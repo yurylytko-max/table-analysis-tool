@@ -49,6 +49,7 @@ DATASETS_FILE = STORAGE_ROOT / "datasets.json"
 current_df: pd.DataFrame | None = None
 current_file_name: str | None = None
 current_dataset_id: str | None = None
+current_file_path: Path | None = None
 upload_status = {"status": "idle", "progress": 0}
 
 
@@ -89,6 +90,13 @@ class AIQueryRequest(BaseModel):
 
 def save_file(file_path: Path, content: bytes):
     file_path.write_bytes(content)
+
+
+def save_dataframe_to_path(df: pd.DataFrame, file_path: Path):
+    if file_path.suffix.lower() == ".xlsx":
+        df.to_excel(file_path, index=False)
+    else:
+        df.to_csv(file_path, index=False)
 
 
 def load_datasets() -> list[dict[str, object]]:
@@ -143,7 +151,7 @@ def get_dataset(dataset_id: str) -> dict[str, object] | None:
 
 
 def load_current_dataset(dataset_id: str):
-    global current_df, current_file_name, current_dataset_id
+    global current_df, current_file_name, current_dataset_id, current_file_path
 
     dataset = get_dataset(dataset_id)
     if dataset is None:
@@ -156,6 +164,7 @@ def load_current_dataset(dataset_id: str):
     current_df = read_table_from_path(file_path)
     current_file_name = str(dataset["name"])
     current_dataset_id = dataset_id
+    current_file_path = file_path
     return dataset
 
 
@@ -301,8 +310,50 @@ def build_ai_dataset_context(message: str):
         "row_count": int(len(df)),
         "column_count": int(len(df.columns)),
         "columns": [str(column) for column in df.columns.tolist()],
+        "sample_rows": dataframe_page_to_records(df, 1, 20),
         "matched_columns": column_details,
     }
+
+
+def parse_ai_json_response(text: str) -> dict[str, object] | None:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if len(lines) >= 3:
+            cleaned = "\n".join(lines[1:-1]).strip()
+
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(cleaned[start:end + 1])
+        except Exception:
+            return None
+    return None
+
+
+def should_apply_ai_edits(message: str) -> bool:
+    lower_message = message.lower()
+    triggers = [
+        "исправ",
+        "поправ",
+        "замени",
+        "нормализ",
+        "очист",
+        "приведи",
+        "apply",
+        "fix",
+        "correct",
+        "replace",
+        "normalize",
+        "clean up",
+    ]
+    return any(trigger in lower_message for trigger in triggers)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1255,7 +1306,6 @@ function getAISummary() {
     return {
         row_count: datasetTotalRows,
         columns: [...latestDatasetColumns],
-        preview_rows: latestDatasetRows.slice(0, 5),
         filters: { ...activeFilters },
         breakdown: [...activeBreakdown],
         top_values: topValues
@@ -1450,6 +1500,13 @@ async function sendAIMessage() {
         }
 
         const data = await res.json();
+        if (data.type === 'applied') {
+            if (activeColumn) {
+                await loadUniqueValues(activeColumn);
+            }
+            await loadDatasetPage(datasetPage);
+            await group();
+        }
         if (!data.text) {
             aiMessages.push({ role: 'AI', text: 'No response yet' });
         } else {
@@ -1696,7 +1753,7 @@ def charts_page():
 
 @app.post("/datasets/upload")
 async def upload_dataset(file: UploadFile = File(...), tags: str = Form(default="")):
-    global current_df, current_file_name, current_dataset_id
+    global current_df, current_file_name, current_dataset_id, current_file_path
 
     if not file.filename or not file.filename.lower().endswith((".csv", ".xlsx")):
         raise HTTPException(status_code=400, detail="Only CSV and XLSX files are supported")
@@ -1709,6 +1766,7 @@ async def upload_dataset(file: UploadFile = File(...), tags: str = Form(default=
     current_df = read_table_from_path(saved_file_path)
     current_file_name = file.filename
     current_dataset_id = dataset_id
+    current_file_path = saved_file_path
 
     datasets = load_datasets()
     datasets.append(
@@ -1726,7 +1784,7 @@ async def upload_dataset(file: UploadFile = File(...), tags: str = Form(default=
 
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
-    global current_df, upload_status, current_file_name, current_dataset_id
+    global current_df, upload_status, current_file_name, current_dataset_id, current_file_path
 
     if not file.filename or not file.filename.lower().endswith((".csv", ".xlsx")):
         raise HTTPException(status_code=400, detail="Only CSV and XLSX files are supported")
@@ -1756,6 +1814,7 @@ async def upload(file: UploadFile = File(...)):
         current_df = await run_in_threadpool(read_table, file)
         current_file_name = file.filename
         current_dataset_id = None
+        current_file_path = file_path
         preview = current_df.head(50).astype(object).where(pd.notna(current_df.head(50)), None)
         upload_status = {"status": "done", "progress": 100}
         print("done")
@@ -1911,6 +1970,8 @@ async def normalize_column(request: NormalizeColumnRequest):
         .str.replace("ё", "е", regex=False)
         .str.replace(r"\s{2,}", " ", regex=True)
     )
+    if current_file_path is not None:
+        await run_in_threadpool(save_dataframe_to_path, current_df, current_file_path)
 
     return {"status": "ok"}
 
@@ -1925,6 +1986,84 @@ async def ai_query(request: AIQueryRequest):
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY is not set")
 
+    dataset_context = build_ai_dataset_context(request.message)
+    apply_mode = should_apply_ai_edits(request.message)
+
+    if apply_mode and current_df is not None and dataset_context:
+        matched_columns = dataset_context.get("matched_columns", {})
+        target_column = next(iter(matched_columns.keys()), None)
+        target_values = []
+        if target_column:
+            target_values = matched_columns.get(target_column, {}).get("unique_values", [])
+
+        if target_column and target_values:
+            prompt = "\n\n".join(
+                [
+                    (
+                        "You are editing a table column. "
+                        "Return only valid JSON with this exact shape: "
+                        "{\"column\":\"...\",\"replacements\":[{\"from\":\"...\",\"to\":\"...\",\"reason\":\"...\"}],"
+                        "\"text\":\"short explanation in Russian\"}. "
+                        "Use replacements only for obvious typos, spelling mistakes, whitespace issues, duplicate variants, "
+                        "or normalization inconsistencies. "
+                        "Do not invent semantic merges between different concepts. "
+                        "If there is nothing to fix, return an empty replacements array."
+                    ),
+                    f"Target column: {target_column}",
+                    f"All unique values in the target column:\n{json.dumps(target_values, ensure_ascii=False)}",
+                    f"User request:\n{request.message}",
+                ]
+            )
+            body = json.dumps(
+                {"contents": [{"parts": [{"text": prompt}]}]}
+            ).encode("utf-8")
+            url = (
+                "https://generativelanguage.googleapis.com/v1beta/models/"
+                f"gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+            )
+            http_request = Request(
+                url,
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+
+            try:
+                with urlopen(http_request, timeout=60) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            except HTTPError as error:
+                detail = error.read().decode("utf-8", errors="ignore") or str(error)
+                raise HTTPException(status_code=502, detail=detail)
+            except URLError as error:
+                raise HTTPException(status_code=502, detail=str(error))
+
+            text = ""
+            for candidate in payload.get("candidates", []):
+                content = candidate.get("content", {})
+                for part in content.get("parts", []):
+                    if "text" in part:
+                        text += part["text"]
+
+            parsed = parse_ai_json_response(text)
+            if parsed and parsed.get("column") == target_column:
+                replacements = parsed.get("replacements", [])
+                mapping = {
+                    str(item["from"]): str(item["to"])
+                    for item in replacements
+                    if isinstance(item, dict)
+                    and item.get("from") not in (None, "")
+                    and item.get("to") not in (None, "")
+                    and str(item["from"]) != str(item["to"])
+                }
+                if mapping:
+                    current_df[target_column] = current_df[target_column].replace(mapping)
+                    if current_file_path is not None:
+                        await run_in_threadpool(save_dataframe_to_path, current_df, current_file_path)
+                return {
+                    "type": "applied",
+                    "text": str(parsed.get("text") or "Изменения применены."),
+                }
+
     instructions = (
         "You are an analytics assistant inside a table analysis app. "
         "You are given context from the currently loaded dataset from the app itself. "
@@ -1932,15 +2071,13 @@ async def ai_query(request: AIQueryRequest):
         "Use the provided dataset context as the available table data. "
         "If matched_columns contains unique_values, that is the full set of unique values for those columns, "
         "not a preview. Use that full set to check spelling, duplicates, normalization issues, and suggest fixes. "
-        "Do not answer in terms of preview_rows when full unique_values are present for the requested column. "
         "When the user asks to check a specific column for typos or cleanup, analyze all unique values in that column "
         "and return concrete suggested corrections. "
         "If the provided context is still insufficient for a precise answer, say exactly what is missing, "
         "but still answer as far as possible from the available dataset context. "
-        "Respond concisely."
+        "Respond concisely in Russian."
     )
 
-    dataset_context = build_ai_dataset_context(request.message)
     prompt_parts = [instructions]
 
     if dataset_context:
