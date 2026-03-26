@@ -259,7 +259,6 @@ def build_ai_dataset_context(message: str):
         return None
 
     df = current_df.copy()
-    preview_rows = df.head(20).astype(object).where(pd.notna(df.head(20)), None).to_dict(orient="records")
     lower_message = message.lower()
     matched_columns = [column for column in df.columns if str(column).lower() in lower_message]
 
@@ -276,7 +275,6 @@ def build_ai_dataset_context(message: str):
         "row_count": int(len(df)),
         "column_count": int(len(df.columns)),
         "columns": [str(column) for column in df.columns.tolist()],
-        "preview_rows": preview_rows,
         "matched_columns": column_details,
     }
 
@@ -1906,8 +1904,13 @@ async def ai_query(request: AIQueryRequest):
         "You are given context from the currently loaded dataset from the app itself. "
         "Do not say that you cannot see the data if dataset context is provided. "
         "Use the provided dataset context as the available table data. "
-        "If the summary is insufficient for a precise answer, say exactly what is missing, "
-        "but still answer as far as possible from the provided summary. "
+        "If matched_columns contains unique_values, that is the full set of unique values for those columns, "
+        "not a preview. Use that full set to check spelling, duplicates, normalization issues, and suggest fixes. "
+        "Do not answer in terms of preview_rows when full unique_values are present for the requested column. "
+        "When the user asks to check a specific column for typos or cleanup, analyze all unique values in that column "
+        "and return concrete suggested corrections. "
+        "If the provided context is still insufficient for a precise answer, say exactly what is missing, "
+        "but still answer as far as possible from the available dataset context. "
         "Respond concisely."
     )
 
