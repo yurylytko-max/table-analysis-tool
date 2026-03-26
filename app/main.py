@@ -16,9 +16,35 @@ from starlette.concurrency import run_in_threadpool
 app = FastAPI()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
-DATA_DIR.mkdir(exist_ok=True)
-DATASETS_FILE = Path(__file__).resolve().parent / "datasets.json"
+def get_storage_root() -> Path:
+    candidates = [
+        os.getenv("APP_STORAGE_DIR"),
+        os.getenv("RAILWAY_VOLUME_MOUNT_PATH"),
+        "/data",
+    ]
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            test_path = path / ".write_test"
+            test_path.write_text("ok", encoding="utf-8")
+            test_path.unlink(missing_ok=True)
+            return path
+        except Exception:
+            continue
+
+    fallback = Path(__file__).resolve().parent
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+STORAGE_ROOT = get_storage_root()
+DATA_DIR = STORAGE_ROOT / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DATASETS_FILE = STORAGE_ROOT / "datasets.json"
 
 current_df: pd.DataFrame | None = None
 current_file_name: str | None = None
