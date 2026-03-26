@@ -656,6 +656,7 @@ def index(dataset_id: str | None = Query(default=None)):
             <button onclick="setResultMode('table')">Table</button>
             <button onclick="setResultMode('json')">JSON</button>
             <button onclick="group()">Refresh</button>
+            <button onclick="openCharts()">Build chart</button>
         </div>
         <div id="ag-grid" class="ag-theme-alpine"></div>
         <div id="result-json-view">
@@ -1175,6 +1176,12 @@ function renderResult(data) {
     setResultMode(resultMode);
 }
 
+function openCharts() {
+    localStorage.setItem("chartData", JSON.stringify(latestResult));
+    localStorage.setItem("chartBreakdown", JSON.stringify(activeBreakdown));
+    window.location.href = "/charts";
+}
+
 function renderAIMessages() {
     const list = document.getElementById('ai-messages');
     const status = document.getElementById('ai-status');
@@ -1406,6 +1413,203 @@ initializeLoadedDataset();
             "Pragma": "no-cache",
             "Expires": "0",
         },
+    )
+
+
+@app.get("/charts", response_class=HTMLResponse)
+def charts_page():
+    return HTMLResponse(
+        """<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Charts</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+    * { box-sizing: border-box; }
+    body {
+        margin: 0;
+        padding: 24px;
+        font-family: Arial, sans-serif;
+        background: #f9fafb;
+        color: #111827;
+    }
+    .wrap {
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+    .toolbar {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: end;
+        margin-bottom: 16px;
+    }
+    .field {
+        min-width: 180px;
+    }
+    label {
+        display: block;
+        font-size: 13px;
+        margin-bottom: 6px;
+        color: #4b5563;
+    }
+    select, button {
+        padding: 8px 10px;
+        border: 1px solid #e5e7eb;
+        border-radius: 4px;
+        background: #fff;
+        font: inherit;
+    }
+    button {
+        background: #f3f4f6;
+        cursor: pointer;
+    }
+    .chart-box {
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 16px;
+    }
+    canvas {
+        width: 100%;
+        max-width: 100%;
+        height: 480px;
+    }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div style="margin-bottom:16px;">
+            <a href="/app">Back to app</a>
+        </div>
+        <div class="toolbar">
+            <div class="field">
+                <label for="chart-type">Chart type</label>
+                <select id="chart-type">
+                    <option value="bar">bar</option>
+                    <option value="line">line</option>
+                    <option value="pie">pie</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="chart-x">X-axis</label>
+                <select id="chart-x"></select>
+            </div>
+            <div class="field">
+                <label for="chart-y">Y-axis</label>
+                <select id="chart-y"></select>
+            </div>
+        </div>
+        <div class="chart-box">
+            <canvas id="chart-canvas"></canvas>
+        </div>
+    </div>
+    <script>
+    let chartInstance = null;
+
+    function flattenResult(items, breakdown, path = {}) {
+        if (!Array.isArray(items)) {
+            if (items && typeof items.count === 'number') {
+                return [{ ...path, count: items.count }];
+            }
+            return [];
+        }
+
+        const levelIndex = Object.keys(path).length;
+        const currentKey = breakdown[levelIndex] || `Level ${levelIndex + 1}`;
+        let rows = [];
+
+        items.forEach(item => {
+            const nextPath = { ...path, [currentKey]: item.group };
+            if (Array.isArray(item.subgroups) && item.subgroups.length) {
+                rows.push(...flattenResult(item.subgroups, breakdown, nextPath));
+            } else {
+                rows.push({ ...nextPath, count: item.count });
+            }
+        });
+
+        return rows;
+    }
+
+    function getRows() {
+        const chartData = JSON.parse(localStorage.getItem('chartData') || '[]');
+        const chartBreakdown = JSON.parse(localStorage.getItem('chartBreakdown') || '[]');
+        return flattenResult(chartData, chartBreakdown);
+    }
+
+    function initFields() {
+        const rows = getRows();
+        if (!rows.length) {
+            return;
+        }
+        const keys = Object.keys(rows[0]).filter(k => k !== 'count');
+        const xSelect = document.getElementById('chart-x');
+        const ySelect = document.getElementById('chart-y');
+        xSelect.innerHTML = '';
+        ySelect.innerHTML = '';
+
+        keys.forEach(column => {
+            const xOpt = document.createElement('option');
+            xOpt.value = column;
+            xOpt.text = column;
+            xSelect.appendChild(xOpt);
+        });
+
+        [...keys, 'count'].forEach(column => {
+            const yOpt = document.createElement('option');
+            yOpt.value = column;
+            yOpt.text = column;
+            ySelect.appendChild(yOpt);
+        });
+
+        xSelect.value = keys[0] || '';
+        ySelect.value = 'count';
+    }
+
+    function buildChart() {
+        const rows = getRows();
+        if (!rows.length) {
+            return;
+        }
+        const type = document.getElementById('chart-type').value;
+        const xKey = document.getElementById('chart-x').value;
+        const yKey = document.getElementById('chart-y').value;
+        const labels = rows.map(row => row[xKey]);
+        const data = rows.map(row => Number(row[yKey]) || 0);
+        const ctx = document.getElementById('chart-canvas');
+
+        if (chartInstance) {
+            chartInstance.destroy();
+        }
+
+        chartInstance = new Chart(ctx, {
+            type: type,
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: yKey,
+                    data: data,
+                    backgroundColor: 'rgba(59, 130, 246, 0.5)',
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 1,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+            }
+        });
+    }
+
+    initFields();
+    document.getElementById('chart-type').addEventListener('change', buildChart);
+    document.getElementById('chart-x').addEventListener('change', buildChart);
+    document.getElementById('chart-y').addEventListener('change', buildChart);
+    buildChart();
+    </script>
+</body>
+</html>"""
     )
 
 
