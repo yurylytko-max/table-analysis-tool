@@ -254,6 +254,33 @@ def dataframe_page_to_records(df: pd.DataFrame, page: int, page_size: int):
     return page_df.to_dict(orient="records")
 
 
+def build_ai_dataset_context(message: str):
+    if current_df is None:
+        return None
+
+    df = current_df.copy()
+    preview_rows = df.head(20).astype(object).where(pd.notna(df.head(20)), None).to_dict(orient="records")
+    lower_message = message.lower()
+    matched_columns = [column for column in df.columns if str(column).lower() in lower_message]
+
+    column_details: dict[str, object] = {}
+    for column in matched_columns:
+        series = df[column].dropna().astype(str)
+        values = series.loc[series.str.strip() != ""].drop_duplicates().tolist()
+        column_details[str(column)] = {
+            "unique_values": values
+        }
+
+    return {
+        "file_name": current_file_name,
+        "row_count": int(len(df)),
+        "column_count": int(len(df.columns)),
+        "columns": [str(column) for column in df.columns.tolist()],
+        "preview_rows": preview_rows,
+        "matched_columns": column_details,
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 def datasets_index():
     datasets = load_datasets()
@@ -1876,21 +1903,29 @@ async def ai_query(request: AIQueryRequest):
 
     instructions = (
         "You are an analytics assistant inside a table analysis app. "
-        "You are given a summary of the currently loaded dataset from the app itself. "
-        "Do not say that you cannot see the data if summary is provided. "
-        "Use the summary as the available dataset context. "
+        "You are given context from the currently loaded dataset from the app itself. "
+        "Do not say that you cannot see the data if dataset context is provided. "
+        "Use the provided dataset context as the available table data. "
         "If the summary is insufficient for a precise answer, say exactly what is missing, "
         "but still answer as far as possible from the provided summary. "
         "Respond concisely."
     )
 
-    prompt = f"{instructions}\n\nUser request:\n{request.message}"
-    if request.summary:
-        prompt = (
-            f"{instructions}\n\n"
-            f"Dataset summary:\n{json.dumps(request.summary, ensure_ascii=False)}\n\n"
-            f"User request:\n{request.message}"
+    dataset_context = build_ai_dataset_context(request.message)
+    prompt_parts = [instructions]
+
+    if dataset_context:
+        prompt_parts.append(
+            f"Dataset context:\n{json.dumps(dataset_context, ensure_ascii=False)}"
         )
+
+    if request.summary:
+        prompt_parts.append(
+            f"Frontend summary:\n{json.dumps(request.summary, ensure_ascii=False)}"
+        )
+
+    prompt_parts.append(f"User request:\n{request.message}")
+    prompt = "\n\n".join(prompt_parts)
 
     body = json.dumps(
         {
